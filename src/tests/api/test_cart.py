@@ -1067,3 +1067,48 @@ def test_cartpos_create_bulk_with_voucher_redeemed(token_client, organizer, even
         assert CartPosition.objects.count() == 1
         cp1 = CartPosition.objects.get(pk=resp.data['results'][0]['data']['id'])
     assert cp1.voucher == voucher
+
+
+@pytest.mark.django_db
+def test_cartpos_create_bulk_with_addon(token_client, organizer, event, item, quota):
+    with scopes_disabled():
+        addon_cat = event.categories.create(name='Addons')
+        addon_item = event.items.create(name='Workshop', default_price=2, category=addon_cat)
+        item.addons.create(addon_category=addon_cat)
+        q = event.quotas.create(name="Addon Quota", size=200)
+        q.items.add(addon_item)
+
+    res = copy.deepcopy(CARTPOS_CREATE_PAYLOAD)
+    res['item'] = item.pk
+    res['expires'] = (now() + datetime.timedelta(days=1)).isoformat()
+    res['addons'] = [
+        {
+            'item': addon_item.pk,
+            'variation': None,
+            'price': '1.00',
+            'attendee_name_parts': {'full_name': 'Peter\'s friend'},
+            'attendee_email': None,
+            'subevent': None,
+            'includes_tax': True,
+            'answers': []
+        }
+    ]
+    resp = token_client.post(
+        '/api/v1/organizers/{}/events/{}/cartpositions/bulk_create/'.format(
+            organizer.slug, event.slug
+        ), format='json', data=[
+            res,
+            res
+        ]
+    )
+    assert resp.status_code == 200
+    assert len(resp.data['results']) == 2
+    assert resp.data['results'][0]['success']
+    assert resp.data['results'][1]['success']
+
+    with scopes_disabled():
+        assert CartPosition.objects.count() == 4
+        cp1 = CartPosition.objects.get(pk=resp.data['results'][0]['data']['id'])
+        cp1a = cp1.addons.get()
+        assert cp1a.item == addon_item
+        assert not cp1a.is_bundled
